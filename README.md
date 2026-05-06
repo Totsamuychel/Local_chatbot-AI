@@ -9,6 +9,55 @@
 
 ---
 
+## 🏗️ Architecture
+
+```mermaid
+graph TD
+    A["📱 User\n(Telegram)"] -- "text / photo / command" --> B["📡 Telegram Servers\n(long-polling)"]
+    B --> C["📥 main.py\napp wiring · run_polling"]
+
+    C --> D["💬 handlers/"]
+
+    subgraph Handlers["Handlers Layer"]
+        D --> E["📝 commands.py\n/start /help /models\n/clear /cancel /settings"]
+        D --> F["🖼️ messages.py\ntext · photo · document"]
+        D --> G["🔘 callbacks.py\ninline keyboard callbacks"]
+    end
+
+    E --> H["📜 context.py\nconversation history\n(last 10 messages)"]
+    F --> H
+    G --> H
+
+    H --> I["🔄 request_manager.py\nasyncio semaphore (max 3)\nper-user cancellation"]
+
+    I --> J{"Cache hit?"}
+    J -- "Yes (TTL 1h)" --> M["✅ Cached response"]
+    J -- "No" --> K["🔌 ollama_client.py\nasync REST client"]
+
+    K --> L["🧠 Ollama REST API\nlocalhost:11434"]
+
+    subgraph Models["🖥️ Local GPU Models"]
+        L --> L1["qwen2.5vl:7b 👁️"]
+        L --> L2["qwen2.5vl:32b 👁️"]
+        L --> L3["qwen3:32b"]
+        L --> L4["qwen2.5-coder:7b"]
+    end
+
+    L --> N["🗓️ cache.py\nResponseCache\nTTL store · auto-cleanup (10 min)"]
+    N --> O["📤 Telegram reply to user"]
+    M --> O
+
+    subgraph Config["⚙️ config.py"]
+        P["model registry"]
+        Q["i18n · EN / UA / RU"]
+        R["🌡️ temperature\nLow · Medium · High"]
+    end
+
+    C --> Config
+```
+
+---
+
 ## ✨ Features
 
 | Feature | Details |
@@ -51,42 +100,13 @@ Local_chatbot-AI/
 
 ## ⚙️ How It Works
 
-```
-User (Telegram)
-      │
-      ▼
- Telegram servers
-      │  (long-polling)
-      ▼
-  main.py  ── registers handlers ──▔
-      │                           │
-      ▼                           ▼
- bot/handlers/              bot/context.py
-  commands.py                 (history)
-  messages.py
-  callbacks.py
-      │
-      ▼
- bot/request_manager.py
-  (semaphore, cancel)
-      │
-      ▼
- bot/ollama_client.py
-  (check cache first)
-      │
-      ▼
-Ollama REST API  ◄── runs on localhost:11434
-  (local GPU)
-      │
-      ▼
-  LLM response
-      │
-      ▼
- bot/cache.py  (store result)
-      │
-      ▼
- Telegram reply to user
-```
+1. The bot starts and listens via **long-polling** from Telegram servers.
+2. Incoming messages are routed to the appropriate handler (`commands`, `messages`, or `callbacks`).
+3. Conversation history (last 10 messages) is managed by `context.py`.
+4. `request_manager.py` limits concurrent Ollama calls (max 3) and supports per-user cancellation.
+5. `ollama_client.py` first checks the **response cache** — if found, returns instantly.
+6. On cache miss, the request goes to the **local Ollama REST API** on `localhost:11434`.
+7. The LLM response is stored in cache and sent back to the user via Telegram.
 
 ---
 
